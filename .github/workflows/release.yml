@@ -36,9 +36,8 @@ jobs:
       - name: Release scripts (version, signatures)
         run: npm test
       - name: System libraries of the Linux webview
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential file libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev patchelf
+        timeout-minutes: 12
+        run: scripts/apt-webview.sh
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
         with:
           toolchain: stable
@@ -109,9 +108,8 @@ jobs:
           cache: npm
       - run: npm ci
       - if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential file libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev patchelf
+        timeout-minutes: 12
+        run: scripts/apt-webview.sh
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
         with:
           toolchain: stable
