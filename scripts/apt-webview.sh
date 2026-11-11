@@ -7,6 +7,11 @@ set -euo pipefail
 packages=(build-essential file libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev patchelf)
 options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=120)
 sudo find /etc/apt/sources.list.d -type f ! -name 'ubuntu.sources' -print -delete
+# The image points apt at a mirror list (mirror+file:/etc/apt/apt-mirrors.txt) that names only the Azure mirror:
+# that list now names the main archive first, and the Azure mirror last.
+if [ -f /etc/apt/apt-mirrors.txt ]; then
+  printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://azure.archive.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+fi
 for file in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
   [ -f "$file" ] && sudo sed -i 's#https\?://azure\.archive\.ubuntu\.com#http://archive.ubuntu.com#g' "$file"
 done
