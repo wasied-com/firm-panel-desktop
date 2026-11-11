@@ -1,0 +1,17 @@
+{
+  "name": "firm-panel-desktop",
+  "private": true,
+  "type": "module",
+  "description": "Desktop shell (Windows, macOS, Linux) of the firm panel, kept up to date on its own.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "tauri": "tauri",
+    "test": "node --test scripts/*.test.mjs",
+    "check": "node scripts/check-repo.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

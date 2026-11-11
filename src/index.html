@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Panel du cabinet</title>
+    <link rel="stylesheet" href="start.css" />
+    <script src="start.js" defer></script>
+  </head>
+  <body>
+    <main class="start" aria-live="polite">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h9" /></svg>
+      </span>
+      <h1>Panel du cabinet</h1>
+      <p class="status" data-phase="connect">Ouverture du panel…</p>
+      <p class="status" data-phase="update" hidden>Installation de la nouvelle version…</p>
+      <div class="status offline" data-phase="offline" hidden>
+        <p>Le panel ne répond pas. Vérifiez la connexion à Internet.</p>
+        <p class="small">Nouvel essai dans <span data-countdown>10</span> s.</p>
+        <button type="button" data-retry>Réessayer maintenant</button>
+      </div>
+      <div class="bar" aria-hidden="true"><span></span></div>
+    </main>
+  </body>
+</html>
