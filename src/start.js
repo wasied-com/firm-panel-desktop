@@ -11,13 +11,18 @@
     for (const node of document.querySelectorAll("[data-phase]")) node.hidden = node.dataset.phase !== name;
   }
 
-  /** The panel answers: any HTTP answer counts, only a network failure or a timeout does not. */
-  async function reachable(url) {
+  /**
+   * The panel is healthy: /api/health answers {"status":"ok"} (the server allows this one route from any origin).
+   * A proxy error page (502 while the server restarts), a timeout or a network failure keep the start page.
+   */
+  async function healthy(url) {
     const controller = new AbortController();
     const stop = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
     try {
-      await fetch(new URL("/api/health", url), { mode: "no-cors", cache: "no-store", signal: controller.signal });
-      return true;
+      const response = await fetch(new URL("/api/health", url), { cache: "no-store", signal: controller.signal });
+      if (!response.ok) return false;
+      const body = await response.json();
+      return body !== null && body.status === "ok";
     } catch {
       return false;
     } finally {
@@ -40,7 +45,7 @@
   async function attempt() {
     clearInterval(timer);
     phase("connect");
-    if (await reachable(target)) {
+    if (await healthy(target)) {
       window.location.replace(target);
       return;
     }
