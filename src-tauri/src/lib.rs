@@ -112,9 +112,10 @@ fn background_updates<R: Runtime>(app: AppHandle<R>) {
             let bytes = update.download(|_, _| {}, || {}).await.ok()?;
             Some((update, bytes))
         });
-        if let (Some(found), Ok(mut slot)) = (found, pending.0.lock()) {
+        let Some(found) = found else { continue };
+        if let Ok(mut slot) = pending.0.lock() {
             *slot = Some(found);
-        }
+        };
     });
 }
 
