@@ -20,7 +20,8 @@ jobs:
         run: |
           app="$RUNNER_TEMP/Probe.app"
           mkdir -p "$app/Contents/MacOS"
-          echo 'int main(void){return 0;}' | xcrun clang -x c - -o "$app/Contents/MacOS/Probe" \
+          echo 'int main(void){return 0;}' > "$RUNNER_TEMP/probe.c"
+          xcrun clang "$RUNNER_TEMP/probe.c" -o "$app/Contents/MacOS/Probe" \
             -arch arm64 -arch x86_64 -mmacosx-version-min=11.0
           cat > "$app/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
