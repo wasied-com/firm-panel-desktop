@@ -1,0 +1,47 @@
+# Probe of the macOS signing chain, on demand: a ten-line application goes through scripts/mac-cloud-sign.sh (signature
+# by the Developer ID certificate kept at Apple, notary, staple, Gatekeeper). It tells within minutes whether the chain
+# of the releases still works (key revoked, agreement to accept, certificate expired), without building the application.
+name: mac signing probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-15
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: A ten-line application
+        run: |
+          app="$RUNNER_TEMP/Probe.app"
+          mkdir -p "$app/Contents/MacOS"
+          echo 'int main(void){return 0;}' | xcrun clang -x c - -o "$app/Contents/MacOS/Probe" \
+            -arch arm64 -arch x86_64 -mmacosx-version-min=11.0
+          cat > "$app/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleIdentifier</key><string>net.wasied.firmpanel.probe</string>
+            <key>CFBundleExecutable</key><string>Probe</string>
+            <key>CFBundleName</key><string>Probe</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>1.0</string>
+            <key>CFBundleVersion</key><string>1</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+          </dict></plist>
+          PLIST
+      - name: Sign, notarise, staple
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          key_file="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$key_file"
+          APPLE_API_KEY_PATH="$key_file" scripts/mac-cloud-sign.sh "$RUNNER_TEMP/Probe.app"
