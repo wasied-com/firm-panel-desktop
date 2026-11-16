@@ -195,6 +195,21 @@ jobs:
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY
           fi
           npx tauri build --ci --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+      # A Mac release with the Developer ID secrets must open without any warning: signed by the team, hardened runtime,
+      # notarised and stapled, accepted by Gatekeeper as an application downloaded from the Internet. Anything less fails.
+      - name: Verify the macOS signature, notarisation and Gatekeeper verdict
+        if: matrix.platform == 'macos' && env.MAC_SIGNED == '1'
+        shell: bash
+        run: |
+          app=$(ls -d src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          details=$(codesign -dvv "$app" 2>&1)
+          echo "$details" | grep -E "Authority=Developer ID Application|TeamIdentifier|flags|Timestamp"
+          echo "$details" | grep -q "Authority=Developer ID Application: .*(GRLD263F65)" || { echo "not signed by the team's Developer ID"; exit 1; }
+          echo "$details" | grep -q "flags=.*runtime" || { echo "the hardened runtime is missing"; exit 1; }
+          xcrun stapler validate "$app"
+          spctl --assess --type execute -vv "$app" 2>&1 | tee gatekeeper.txt
+          grep -q "source=Notarized Developer ID" gatekeeper.txt || { echo "Gatekeeper does not accept the application"; exit 1; }
       - name: Gather the installers
         shell: bash
         run: node scripts/collect-bundles.mjs "${{ matrix.platform }}" "${{ needs.version.outputs.version }}" "${{ matrix.target }}"
