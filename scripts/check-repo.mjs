@@ -1,7 +1,9 @@
 // Static checks of the repository, run by the CI before any build:
 //   - the start page loads no inline script or style (the CSP of the window forbids them);
 //   - every file the start page names exists;
-//   - no long dash (U+2013, U+2014) in any text of the repository.
+//   - no long dash (U+2013, U+2014) in any text of the repository;
+//   - no workflow stores files in the artifact storage of GitHub (capped for the whole organisation): jobs hand files
+//     over through the draft release instead.
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 
@@ -28,6 +30,15 @@ function walk(dir) {
   }
 }
 walk(root);
+
+// Split so that this file never matches its own pattern.
+const ARTIFACT_ACTION = new RegExp("actions/(upload|download)-" + "artifact");
+const workflows = path.join(root, ".github", "workflows");
+for (const name of readdirSync(workflows)) {
+  if (ARTIFACT_ACTION.test(readFileSync(path.join(workflows, name), "utf8"))) {
+    problems.push(`.github/workflows/${name}: GitHub artifact action (keep files on the runner or in the release)`);
+  }
+}
 
 for (const problem of problems) console.error(`FAIL ${problem}`);
 console.log(problems.length === 0 ? "ok   repository checks" : `${problems.length} problem(s)`);

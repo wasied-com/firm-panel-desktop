@@ -1,7 +1,10 @@
 # One pipeline from a push to the installed applications:
-#   check (every push and pull request) -> version (main) -> build on macOS, Windows and Linux -> publish -> verify.
+#   check (every push and pull request) -> version (main) -> draft release -> build on macOS, Windows and Linux, each
+#   uploading its installers to the draft -> publish (latest.json from the files of the draft, then public) -> verify.
 # A release happens only when the commits since the last one ask for it (scripts/version.mjs) and every check passed.
 # Installed applications find it on their own: they read releases/latest/download/latest.json at start and every 4 h.
+# No file goes through the artifact storage of GitHub (capped for the organisation): the draft release carries them,
+# and a draft is seen neither by the public nor by the updater ("latest" only ever names a published release).
 name: release
 
 on:
@@ -74,10 +77,48 @@ jobs:
       - id: next
         run: node scripts/next-version.mjs
 
-  build:
+  draft:
     needs: version
     if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-24.04
     environment: production
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: A draft left by a failed run of this version is discarded, a published one stops the run
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"v$VERSION\") | \"\(.id) \(.draft)\"" > same-tag.txt
+          cat same-tag.txt
+          while read -r id draft; do
+            if [ "$draft" != "true" ]; then
+              echo "::error::v$VERSION is already published (release $id)"
+              exit 1
+            fi
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            echo "discarded the draft $id"
+          done < same-tag.txt
+      - id: create
+        name: Draft release (no tag until it is published, invisible to the public and to the updater)
+        run: |
+          id="$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="v$VERSION" -f target_commitish="$GITHUB_SHA" \
+            -f name="Panel du cabinet $VERSION" -F draft=true --jq .id)"
+          echo "draft release $id for v$VERSION at $GITHUB_SHA"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [version, draft]
+    if: needs.version.outputs.release == 'true'
+    environment: production
+    permissions:
+      contents: write
     strategy:
       fail-fast: true
       matrix:
@@ -101,7 +142,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
+      # The token of this job may write releases: it is given to the upload step only, never left in .git/config
+      # where the build (npm packages, crate build scripts) could read it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -153,15 +198,51 @@ jobs:
       - name: Gather the installers
         shell: bash
         run: node scripts/collect-bundles.mjs "${{ matrix.platform }}" "${{ needs.version.outputs.version }}" "${{ matrix.target }}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bundle-${{ matrix.platform }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 7
+      # The content type of each file is set here, not guessed from the system of the runner (gh asks the registry on
+      # Windows): the release keeps exactly the types of v0.1.0 and v0.1.1, whatever machine uploads.
+      - name: Upload the installers to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.draft.outputs.id }}
+        run: |
+          for file in dist/*; do
+            name="${file##*/}"
+            case "$name" in
+              *.app.tar.gz) type=application/x-gtar ;;
+              *.dmg) type=application/x-apple-diskimage ;;
+              *.exe) type=application/octet-stream ;;
+              *.sig) type=application/pgp-signature ;;
+              *.AppImage) type=application/vnd.appimage ;;
+              *.deb) type=application/x-debian-package ;;
+              *) echo "::error::no content type for $name"; exit 1 ;;
+            esac
+            for attempt in 1 2 3; do
+              # A re-run, or an upload cut short, leaves an asset of that name on the draft: it goes first.
+              for asset in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
+                --jq ".[] | select(.name == \"$name\") | .id"); do
+                gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset"
+              done
+              rm -f upload.json
+              if curl --fail-with-body --silent --show-error --max-time 1200 --output upload.json \
+                --header "Authorization: Bearer $GH_TOKEN" \
+                --header "Accept: application/vnd.github+json" \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                --header "Content-Type: $type" \
+                --data-binary "@$file" \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name&label="; then
+                echo "uploaded $name ($type, $(wc -c < "$file" | tr -d ' ') bytes)"
+                continue 2
+              fi
+              cat upload.json || true
+              echo "upload of $name failed (attempt $attempt of 3)"
+            done
+            echo "::error::could not upload $name"
+            exit 1
+          done
 
   publish:
-    needs: [version, build]
+    needs: [version, draft, build]
     runs-on: ubuntu-24.04
     environment: production
     timeout-minutes: 20
@@ -170,7 +251,9 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       PREVIOUS: ${{ needs.version.outputs.previous }}
+      RELEASE_ID: ${{ needs.draft.outputs.id }}
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -178,11 +261,20 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: bundle-*
-          path: dist
-          merge-multiple: true
+      - name: The release of this run is still a draft, and the one gh finds under v${{ needs.version.outputs.version }}
+        run: |
+          draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .draft)"
+          if [ "$draft" != "true" ]; then echo "::error::release $RELEASE_ID is no longer a draft"; exit 1; fi
+          found="$(gh release view "v$VERSION" --json databaseId,isDraft --jq '"\(.databaseId) \(.isDraft)"')"
+          if [ "$found" != "$RELEASE_ID true" ]; then echo "::error::v$VERSION resolves to $found, expected $RELEASE_ID true"; exit 1; fi
+      - name: The installers, as they are on the draft
+        run: |
+          gh release download "v$VERSION" --dir dist
+          ls -l dist
+          # The unversioned names behind releases/latest/download/<name> are the same bytes as the versioned ones.
+          cmp "dist/Panel-du-cabinet-macos.dmg" "dist/Panel-du-cabinet-$VERSION-macos-universal.dmg"
+          cmp "dist/Panel-du-cabinet-windows-setup.exe" "dist/Panel-du-cabinet-$VERSION-windows-x64-setup.exe"
+          cmp "dist/Panel-du-cabinet-linux.AppImage" "dist/Panel-du-cabinet-$VERSION-linux-x86_64.AppImage"
       - name: Release notes (the commits since the last release)
         run: |
           range="HEAD"; if [ -n "$PREVIOUS" ]; then range="v$PREVIOUS..HEAD"; fi
@@ -191,10 +283,34 @@ jobs:
       - run: node scripts/latest-json.mjs "$VERSION" notes.md
       - name: Every file is signed by the key built into the application
         run: node scripts/verify-release.mjs local "$VERSION"
-      - name: Publish (a draft first, made public only once every file is uploaded)
+      - name: Upload latest.json to the draft
+        run: gh release upload "v$VERSION" dist/latest.json --clobber
+      - name: The draft holds exactly the files of a release, fully uploaded, with their usual types
         run: |
-          gh release create "v$VERSION" --draft --target "$GITHUB_SHA" \
-            --title "Panel du cabinet $VERSION" --notes-file notes.md dist/*
-          gh release edit "v$VERSION" --draft=false --latest
+          expected="$(sort <<EOF
+          latest.json application/json uploaded
+          Panel-du-cabinet-$VERSION-linux-amd64.deb application/x-debian-package uploaded
+          Panel-du-cabinet-$VERSION-linux-x86_64.AppImage application/vnd.appimage uploaded
+          Panel-du-cabinet-$VERSION-linux-x86_64.AppImage.sig application/pgp-signature uploaded
+          Panel-du-cabinet-$VERSION-macos-universal.app.tar.gz application/x-gtar uploaded
+          Panel-du-cabinet-$VERSION-macos-universal.app.tar.gz.sig application/pgp-signature uploaded
+          Panel-du-cabinet-$VERSION-macos-universal.dmg application/x-apple-diskimage uploaded
+          Panel-du-cabinet-$VERSION-windows-x64-setup.exe application/octet-stream uploaded
+          Panel-du-cabinet-$VERSION-windows-x64-setup.exe.sig application/pgp-signature uploaded
+          Panel-du-cabinet-linux.AppImage application/vnd.appimage uploaded
+          Panel-du-cabinet-macos.dmg application/x-apple-diskimage uploaded
+          Panel-du-cabinet-windows-setup.exe application/octet-stream uploaded
+          EOF
+          )"
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
+            --jq '.[] | "\(.name) \(.content_type) \(.state)"' | sort)"
+          if [ "$actual" != "$expected" ]; then
+            diff <(echo "$expected") <(echo "$actual") || true
+            echo "::error::the draft does not hold the expected files"
+            exit 1
+          fi
+          echo "$actual"
+      - name: Publish (notes, public and latest in one change)
+        run: gh release edit "v$VERSION" --notes-file notes.md --draft=false --latest
       - name: The public update file names this version and every file passes
         run: node scripts/verify-release.mjs public "$VERSION"
