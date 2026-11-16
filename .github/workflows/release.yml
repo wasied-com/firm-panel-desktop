@@ -210,6 +210,24 @@ jobs:
           xcrun stapler validate "$app"
           spctl --assess --type execute -vv "$app" 2>&1 | tee gatekeeper.txt
           grep -q "source=Notarized Developer ID" gatekeeper.txt || { echo "Gatekeeper does not accept the application"; exit 1; }
+      # Tauri notarises the application, not the disk image around it: a downloaded image that is signed but not
+      # notarised is rejected when it is opened (measured on a Mac on 2026-11-16, release 0.1.2). The image goes to the
+      # notary too, gets its ticket stapled, and must be accepted the way a downloaded file is opened.
+      - name: Notarise and staple the disk image
+        if: matrix.platform == 'macos' && env.MAC_SIGNED == '1'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          dmg=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          xcrun notarytool submit "$dmg" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" --wait --timeout 30m --output-format json | tee notary.json
+          grep -q '"status" *: *"Accepted"' notary.json || { echo "the notary did not accept the disk image"; exit 1; }
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature -vv "$dmg" 2>&1 | tee gatekeeper-dmg.txt
+          grep -q "source=Notarized Developer ID" gatekeeper-dmg.txt || { echo "Gatekeeper does not accept the disk image"; exit 1; }
       - name: Gather the installers
         shell: bash
         run: node scripts/collect-bundles.mjs "${{ matrix.platform }}" "${{ needs.version.outputs.version }}" "${{ matrix.target }}"
