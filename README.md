@@ -32,7 +32,10 @@ These links always give the latest release.
    `fix`/`perf`/`security`/`refactor`/`revert` patch, `!` major, `ci`/`docs`/`chore`/`test`/`build`/`style` no release;
    `Release-As: X.Y.Z` trailer to force). No releasable commit, no release.
 3. **build**: macOS universal (`.dmg` + updater archive), Windows x64 (NSIS, per-user install, no admin rights), Linux
-   (`.AppImage` + `.deb`), each signed with the updater key.
+   (`.AppImage` + `.deb`), each signed with the updater key. The macOS disk image is built by `dmgbuild` from
+   `macos/dmg` (window with a background, the application on the left, Applications on the right, an arrow and an
+   instruction in French), its layout read back by `macos/dmg/verify.py`, then signed, notarised and stapled. After a
+   change of `layout.json` or of the wording, redraw the background: `python3 macos/dmg/draw-background.py` (Pillow).
 4. **publish**: `latest.json` is written, every file is verified against `assets/updater.pub`, the release is created
    as a draft, filled, then made public.
 5. **verify**: the public `latest.json` is read back and every file it names is downloaded and verified again.

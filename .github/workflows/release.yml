@@ -127,7 +127,8 @@ jobs:
             os: macos-15
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            bundles: app,dmg
+            # The disk image is built after the application, by dmgbuild (step "Disk image..." below), not by Tauri.
+            bundles: app
           - platform: windows
             os: windows-2025
             target: x86_64-pc-windows-msvc
@@ -210,6 +211,69 @@ jobs:
           xcrun stapler validate "$app"
           spctl --assess --type execute -vv "$app" 2>&1 | tee gatekeeper.txt
           grep -q "source=Notarized Developer ID" gatekeeper.txt || { echo "Gatekeeper does not accept the application"; exit 1; }
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: matrix.platform == 'macos'
+        with:
+          python-version: "3.13"
+      # The disk image is built here, not by Tauri: the script bundled with Tauri skips its Finder step whenever CI=true
+      # (--skip-jenkins), which shipped a raw window up to 0.1.3: icons anywhere, no background, no instruction.
+      # dmgbuild writes the window layout (.DS_Store) itself, from macos/dmg; verify.py reads it back from the image and
+      # the release fails unless the window is the one laid out. The image is then signed with the Developer ID of the
+      # team (Tauri signed its own image; its keychain is gone by now, so the certificate is imported here).
+      - name: Disk image, with its window laid out (macos/dmg)
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          app=$(ls -d "$bundle"/macos/*.app)
+          name=$(basename "$app")
+          tools="$RUNNER_TEMP/dmgbuild"
+          python -m venv "$tools"
+          "$tools/bin/pip" install --quiet --require-hashes --only-binary :all: -r macos/dmg/requirements.txt
+          mkdir -p "$bundle/dmg"
+          dmg="$bundle/dmg/Panel du cabinet_${VERSION}_universal.dmg"
+          "$tools/bin/dmgbuild" -s macos/dmg/settings.py -D app="$app" "Panel du cabinet" "$dmg"
+
+          mount="$RUNNER_TEMP/dmg-check"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$dmg"
+          status=0
+          "$tools/bin/python" -I macos/dmg/verify.py "$mount" "$name" || status=1
+          diff -r "$app" "$mount/$name" > /dev/null || { echo "the application in the image differs from the built one"; status=1; }
+          codesign --verify --deep --strict "$mount/$name" || { echo "the application in the image fails codesign"; status=1; }
+          if [ "$MAC_SIGNED" = "1" ]; then
+            xcrun stapler validate "$mount/$name" || status=1
+          fi
+          hdiutil detach "$mount"
+          [ "$status" = "0" ] || exit 1
+
+          if [ "$MAC_SIGNED" = "1" ]; then
+            keychain="$RUNNER_TEMP/dmg-signing.keychain-db"
+            password="$(openssl rand -hex 24)"
+            security create-keychain -p "$password" "$keychain"
+            security set-keychain-settings -lut 3600 "$keychain"
+            security unlock-keychain -p "$password" "$keychain"
+            # In the search list too, so that codesign finds the chain; deleting the keychain takes it out again.
+            security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+            printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+            security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+              -T /usr/bin/codesign > /dev/null
+            rm -f "$RUNNER_TEMP/certificate.p12"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+            codesign --force --timestamp --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+            security delete-keychain "$keychain"
+            codesign --verify --strict --verbose=2 "$dmg"
+            details=$(codesign -dvv "$dmg" 2>&1)
+            grep -q "Authority=Developer ID Application: .*(GRLD263F65)" <<< "$details" \
+              || { echo "the disk image is not signed by the team's Developer ID"; exit 1; }
+          fi
+          ls -l "$bundle/dmg"
       # Tauri notarises the application, not the disk image around it: a downloaded image that is signed but not
       # notarised is rejected when it is opened (measured on a Mac on 2026-11-16, release 0.1.2). The image goes to the
       # notary too, gets its ticket stapled, and must be accepted the way a downloaded file is opened.
