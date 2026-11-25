@@ -1,0 +1,12 @@
+#!/bin/sh
+# pre-push: versioned in .githooks/, wired by `sh install-hooks.sh` (core.hooksPath).
+# English-only gate: refuses French ADDED by this push (comments, identifiers, file names, JSON keys, internal
+# log/error strings; text shown to people stays French). One shared engine for every repo; rule and exceptions
+# are in its header. Without the engine (CI, fresh machine) it says so and lets the push go on.
+GATE="${NO_NEW_FRENCH_ENGINE:-$HOME/.claude/shared/hooks/no-new-french.py}"
+if [ -f "$GATE" ]; then
+  python3 "$GATE" --pre-push || exit 1
+else
+  echo "no-new-french: engine not found ($GATE), check skipped"
+fi
+exit 0
