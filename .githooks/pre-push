@@ -1,12 +1,19 @@
 #!/bin/sh
 # pre-push: versioned in .githooks/, wired by `sh install-hooks.sh` (core.hooksPath).
 # English-only gate: refuses French ADDED by this push (comments, identifiers, file names, JSON keys, internal
-# log/error strings; text shown to people stays French). One shared engine for every repo; rule and exceptions
-# are in its header. Without the engine (CI, fresh machine) it says so and lets the push go on.
-GATE="${NO_NEW_FRENCH_ENGINE:-$HOME/.claude/shared/hooks/no-new-french.py}"
-if [ -f "$GATE" ]; then
-  python3 "$GATE" --pre-push || exit 1
+# log/error strings; text shown to people stays French). ONE shared launcher for every repo (rules in the header of
+# ~/.claude/shared/hooks/no-new-french.py), no switch. It exits 3 to refuse; a missing or broken gate never blocks
+# a push but says so out loud (CI, fresh machine, no Python).
+NNF_LAUNCHER="$HOME/.claude/shared/hooks/no-new-french-pre-push.sh"
+if [ -f "$NNF_LAUNCHER" ]; then
+  NNF_RC=0
+  sh "$NNF_LAUNCHER" || NNF_RC=$?
+  if [ "$NNF_RC" -eq 3 ]; then
+    exit 1
+  elif [ "$NNF_RC" -ne 0 ]; then
+    echo "no-new-french: WARNING: the gate launcher failed (exit $NNF_RC). This push is NOT checked for new French." >&2
+  fi
 else
-  echo "no-new-french: engine not found ($GATE), check skipped"
+  echo "no-new-french: WARNING: gate not installed ($NNF_LAUNCHER). This push is NOT checked for new French." >&2
 fi
 exit 0
