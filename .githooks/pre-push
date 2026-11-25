@@ -7,7 +7,7 @@
 NNF_LAUNCHER="$HOME/.claude/shared/hooks/no-new-french-pre-push.sh"
 if [ -f "$NNF_LAUNCHER" ]; then
   NNF_RC=0
-  sh "$NNF_LAUNCHER" || NNF_RC=$?
+  sh "$NNF_LAUNCHER" "$@" || NNF_RC=$?
   if [ "$NNF_RC" -eq 3 ]; then
     exit 1
   elif [ "$NNF_RC" -ne 0 ]; then
